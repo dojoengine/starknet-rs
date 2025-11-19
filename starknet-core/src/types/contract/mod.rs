@@ -550,28 +550,6 @@ pub use errors::{
 pub use errors::CompressProgramError;
 
 impl SierraClass {
-    /// Computes the class hash of the Sierra (Cairo 1) class using Blake2s.
-    pub fn class_hash_blake2s(&self) -> Result<Felt, ComputeClassHashError> {
-        let abi_str = to_string_pythonic(&self.abi).map_err(|err| {
-            ComputeClassHashError::Json(JsonError {
-                message: format!("{err}"),
-            })
-        })?;
-
-        let hash_content = vec![
-            PREFIX_CONTRACT_CLASS_V0_1_0,
-            hash_sierra_entrypoints(&self.entry_points_by_type.external),
-            hash_sierra_entrypoints(&self.entry_points_by_type.l1_handler),
-            hash_sierra_entrypoints(&self.entry_points_by_type.constructor),
-            starknet_keccak(abi_str.as_bytes()),
-            poseidon_hash_many(&self.sierra_program),
-        ];
-
-        Ok(normalize_address(
-            Blake2Felt252::hash_array(&hash_content).into(),
-        ))
-    }
-
     /// Computes the class hash of the Sierra (Cairo 1) class.
     pub fn class_hash(&self) -> Result<Felt, ComputeClassHashError> {
         // Technically we don't have to use the Pythonic JSON style here. Doing this just to align
@@ -658,28 +636,6 @@ impl FlattenedSierraClass {
 
         normalize_address(hasher.finalize())
     }
-
-    /// Computes the class hash of the Sierra (Cairo 1) class using Blake2s.
-    pub fn class_hash_blake2s(&self) -> Result<Felt, ComputeClassHashError> {
-        let abi_str = to_string_pythonic(&self.abi).map_err(|err| {
-            ComputeClassHashError::Json(JsonError {
-                message: format!("{err}"),
-            })
-        })?;
-
-        let hash_content = vec![
-            PREFIX_CONTRACT_CLASS_V0_1_0,
-            hash_sierra_entrypoints(&self.entry_points_by_type.external),
-            hash_sierra_entrypoints(&self.entry_points_by_type.l1_handler),
-            hash_sierra_entrypoints(&self.entry_points_by_type.constructor),
-            starknet_keccak(abi_str.as_bytes()),
-            poseidon_hash_many(&self.sierra_program),
-        ];
-
-        Ok(normalize_address(
-            Blake2Felt252::hash_array(&hash_content).into(),
-        ))
-    }
 }
 
 impl CompiledClass {
@@ -744,6 +700,62 @@ impl CompiledClass {
         );
 
         Ok(hasher.finalize())
+    }
+
+    /// Computes the class hash of the Cairo assembly (CASM) class using the Blake2s hash function.
+    pub fn class_hash_v2(&self) -> Result<Felt, ComputeClassHashError> {
+        let mut hash_content = vec![
+            PREFIX_COMPILED_CLASS_V1,
+            Self::hash_entrypoints(&self.entry_points_by_type.external)
+                .map_err(|_| ComputeClassHashError::InvalidBuiltinName)?,
+            Self::hash_entrypoints(&self.entry_points_by_type.l1_handler)
+                .map_err(|_| ComputeClassHashError::InvalidBuiltinName)?,
+            Self::hash_entrypoints(&self.entry_points_by_type.constructor)
+                .map_err(|_| ComputeClassHashError::InvalidBuiltinName)?,
+        ];
+
+        // Hashes bytecode
+        hash_content.push(
+            if let Some(bytecode_segment_lengths) = self.bytecode_segment_lengths.clone() {
+                // `bytecode_segment_lengths` was added since Sierra 1.5.0 and changed hash calculation.
+                // This implementation here is basically a direct translation of the Python code from
+                // `cairo-lang` v0.13.1. The goal was simply to have a working implementation as quickly
+                // as possible. There should be some optimizations to be made here.
+                // TODO: review how this can be optimized
+
+                // NOTE: this looks extremely inefficient. Maybe just use a number for tracking instead?
+                let mut rev_visited_pcs: Vec<u64> =
+                    (0..(self.bytecode.len() as u64)).rev().collect();
+
+                let (res, total_len) = Self::create_bytecode_segment_structure_inner(
+                    &self.bytecode,
+                    &bytecode_segment_lengths,
+                    &mut rev_visited_pcs,
+                    &mut 0,
+                )?;
+
+                if total_len != self.bytecode.len() as u64 {
+                    return Err(ComputeClassHashError::BytecodeSegmentLengthMismatch(
+                        BytecodeSegmentLengthMismatchError {
+                            segment_length: total_len as usize,
+                            bytecode_length: self.bytecode.len(),
+                        },
+                    ));
+                }
+                if !rev_visited_pcs.is_empty() {
+                    return Err(ComputeClassHashError::PcOutOfRange(PcOutOfRangeError {
+                        pc: rev_visited_pcs[rev_visited_pcs.len() - 1],
+                    }));
+                }
+
+                res.hash()
+            } else {
+                // Pre-Sierra-1.5.0 compiled classes
+                poseidon_hash_many(&self.bytecode)
+            },
+        );
+
+        Ok(Blake2Felt252::hash_array(&hash_content).into())
     }
 
     fn hash_entrypoints(

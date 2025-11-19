@@ -9,9 +9,9 @@ use crate::types::{Felt, U256};
 pub use starknet_core_derive::{Decode, Encode};
 
 const I128_MIN: Felt =
-    Felt::from_hex_unchecked("0x0800000000000010ffffffffffffffff80000000000000000000000000000001");
+    Felt::from_hex_unwrap("0x0800000000000010ffffffffffffffff80000000000000000000000000000001");
 const I128_MAX: Felt =
-    Felt::from_hex_unchecked("0x000000000000000000000000000000007fffffffffffffffffffffffffffffff");
+    Felt::from_hex_unwrap("0x000000000000000000000000000000007fffffffffffffffffffffffffffffff");
 
 /// Any type where [`Felt`]s can be written into. This would typically be [`Vec<Felt>`], but can
 /// also be something like a stateful hasher.

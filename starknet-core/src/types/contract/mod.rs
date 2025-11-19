@@ -4,7 +4,7 @@ use serde::{de::Visitor, ser::SerializeSeq, Deserialize, Deserializer, Serialize
 use serde_json_pythonic::to_string_pythonic;
 use serde_with::serde_as;
 use starknet_crypto::{poseidon_hash_many, PoseidonHasher};
-use blake2s::encode_felt252_data_and_calc_224_bit_blake_hash;
+use starknet_types_core::hash::{Blake2Felt252, StarkHash};
 
 use crate::{
     serde::unsigned_field_element::UfeHex,
@@ -552,10 +552,6 @@ pub use errors::CompressProgramError;
 impl SierraClass {
     /// Computes the class hash of the Sierra (Cairo 1) class using Blake2s.
     pub fn class_hash_blake2s(&self) -> Result<Felt, ComputeClassHashError> {
-        // Technically we don't have to use the Pythonic JSON style here. Doing this just to align
-        // with the official `cairo-lang` CLI.
-        //
-        // TODO: add an `AbiFormatter` trait and let users choose which one to use.
         let abi_str = to_string_pythonic(&self.abi).map_err(|err| {
             ComputeClassHashError::Json(JsonError {
                 message: format!("{err}"),
@@ -571,7 +567,9 @@ impl SierraClass {
             poseidon_hash_many(&self.sierra_program),
         ];
 
-        Ok(normalize_address(encode_felt252_data_and_calc_224_bit_blake_hash(&hash_content)))
+        Ok(normalize_address(
+            Blake2Felt252::hash_array(&hash_content).into(),
+        ))
     }
 
     /// Computes the class hash of the Sierra (Cairo 1) class.
@@ -659,6 +657,28 @@ impl FlattenedSierraClass {
         hasher.update(poseidon_hash_many(&self.sierra_program));
 
         normalize_address(hasher.finalize())
+    }
+
+    /// Computes the class hash of the Sierra (Cairo 1) class using Blake2s.
+    pub fn class_hash_blake2s(&self) -> Result<Felt, ComputeClassHashError> {
+        let abi_str = to_string_pythonic(&self.abi).map_err(|err| {
+            ComputeClassHashError::Json(JsonError {
+                message: format!("{err}"),
+            })
+        })?;
+
+        let hash_content = vec![
+            PREFIX_CONTRACT_CLASS_V0_1_0,
+            hash_sierra_entrypoints(&self.entry_points_by_type.external),
+            hash_sierra_entrypoints(&self.entry_points_by_type.l1_handler),
+            hash_sierra_entrypoints(&self.entry_points_by_type.constructor),
+            starknet_keccak(abi_str.as_bytes()),
+            poseidon_hash_many(&self.sierra_program),
+        ];
+
+        Ok(normalize_address(
+            Blake2Felt252::hash_array(&hash_content).into(),
+        ))
     }
 }
 
